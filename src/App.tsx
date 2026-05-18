@@ -1,15 +1,17 @@
-import { useState, useCallback, useRef, useEffect } from 'react';
-import { usePersistentState } from '@/hooks/usePersistentState';
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
+import { useAuth } from '@/hooks/useAuth';
 import { useSound } from '@/hooks/useSound';
 import { THEMES } from '@/types';
 import type { Task, DrawerType } from '@/types';
-import { SearchIcon, ListIcon } from '@/components/Icons';
+import { trpc } from '@/providers/trpc';
+import { SearchIcon, ListIcon, LogOutIcon } from '@/components/Icons';
 import { TaskListDrawer } from '@/components/TaskListDrawer';
 import { SearchDrawer } from '@/components/SearchDrawer';
 import { TrashDrawer } from '@/components/TrashDrawer';
 import { HistoryArea } from '@/components/HistoryArea';
 import { ControlPanel } from '@/components/ControlPanel';
 import { ShortcutsOverlay } from '@/components/ShortcutsOverlay';
+import { LoginPage } from '@/pages/LoginPage';
 import './App.css';
 
 function generateId() {
@@ -17,9 +19,53 @@ function generateId() {
 }
 
 export default function App() {
-  const { state, updateState } = usePersistentState();
-  const { playCapture, playError, playComplete, playDelete } = useSound(state.soundEnabled);
-  const theme = THEMES[state.themeIndex];
+  const { user, isLoading: authLoading, isAuthenticated, logout } = useAuth();
+  const theme = THEMES[0]; // Default theme
+
+  // tRPC queries & mutations
+  const utils = trpc.useUtils();
+  const tasksQuery = trpc.task.list.useQuery(undefined, {
+    enabled: isAuthenticated,
+    staleTime: 1000,
+  });
+  const createTask = trpc.task.create.useMutation({
+    onSuccess: () => utils.task.list.invalidate(),
+  });
+  const toggleTask = trpc.task.toggleComplete.useMutation({
+    onSuccess: () => utils.task.list.invalidate(),
+  });
+  const updateTask = trpc.task.update.useMutation({
+    onSuccess: () => utils.task.list.invalidate(),
+  });
+  const softDeleteTask = trpc.task.softDelete.useMutation({
+    onSuccess: () => utils.task.list.invalidate(),
+  });
+  const restoreTaskMut = trpc.task.restore.useMutation({
+    onSuccess: () => utils.task.list.invalidate(),
+  });
+  const clearCompletedMut = trpc.task.clearCompleted.useMutation({
+    onSuccess: () => utils.task.list.invalidate(),
+  });
+  const clearTrashMut = trpc.task.clearTrash.useMutation({
+    onSuccess: () => utils.task.list.invalidate(),
+  });
+
+  // Convert DB tasks to our Task type
+  const allTasks: Task[] = useMemo(() => {
+    if (!tasksQuery.data) return [];
+    return tasksQuery.data.map(t => ({
+      id: String(t.id),
+      content: t.content,
+      completed: t.completed,
+      createdAt: new Date(t.createdAt).getTime(),
+      deletedAt: t.deletedAt ? new Date(t.deletedAt).getTime() : undefined,
+    }));
+  }, [tasksQuery.data]);
+
+  const activeTasks = useMemo(() => allTasks.filter(t => !t.deletedAt), [allTasks]);
+  const deletedTasks = useMemo(() => allTasks.filter(t => !!t.deletedAt), [allTasks]);
+
+  const { playCapture, playError, playComplete, playDelete } = useSound(true);
 
   const [currentInput, setCurrentInput] = useState('');
   const [isInputFocused, setIsInputFocused] = useState(false);
@@ -34,29 +80,22 @@ export default function App() {
 
   // Show enter hint when typing
   useEffect(() => {
-    if (currentInput.trim().length > 0) {
-      setShowEnterHint(true);
-    } else {
-      setShowEnterHint(false);
-    }
+    setShowEnterHint(currentInput.trim().length > 0);
   }, [currentInput]);
 
   // Keyboard shortcuts
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      // Cmd/Ctrl + K = search
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
         e.preventDefault();
         setActiveDrawer(prev => prev === 'search' ? 'none' : 'search');
         return;
       }
-      // Cmd/Ctrl + L = list
       if ((e.metaKey || e.ctrlKey) && e.key === 'l') {
         e.preventDefault();
         setActiveDrawer(prev => prev === 'list' ? 'none' : 'list');
         return;
       }
-      // Escape = close drawers
       if (e.key === 'Escape') {
         setActiveDrawer('none');
         setShowShortcuts(false);
@@ -76,73 +115,45 @@ export default function App() {
       return;
     }
 
-    const newTask: Task = {
-      id: generateId(),
-      content: trimmed,
-      completed: false,
-      createdAt: Date.now(),
-    };
-
     playCapture();
-    setAnimatingTaskId(newTask.id);
-    updateState(prev => ({ tasks: [newTask, ...prev.tasks] }));
+    const tempId = generateId();
+    setAnimatingTaskId(tempId);
+    createTask.mutate({ content: trimmed });
     setCurrentInput('');
     if (inputRef.current) {
       inputRef.current.textContent = '';
     }
-
     setTimeout(() => setAnimatingTaskId(null), 500);
-  }, [currentInput, playCapture, playError, updateState]);
+  }, [currentInput, playCapture, playError, createTask]);
 
   const toggleComplete = useCallback((id: string) => {
-    const task = state.tasks.find(t => t.id === id);
+    const task = activeTasks.find(t => t.id === id);
     if (task && !task.completed) {
       playComplete();
     }
-    updateState(prev => ({
-      tasks: prev.tasks.map(t => t.id === id ? { ...t, completed: !t.completed } : t),
-    }));
-  }, [state.tasks, playComplete, updateState]);
+    toggleTask.mutate({ id: Number(id) });
+  }, [activeTasks, playComplete, toggleTask]);
 
   const deleteTask = useCallback((id: string) => {
-    const task = state.tasks.find(t => t.id === id);
-    if (task) {
-      playDelete();
-      updateState(prev => ({
-        tasks: prev.tasks.filter(t => t.id !== id),
-        deletedTasks: [{ ...task, deletedAt: Date.now() }, ...prev.deletedTasks],
-      }));
-    }
-  }, [state.tasks, playDelete, updateState]);
+    playDelete();
+    softDeleteTask.mutate({ id: Number(id) });
+  }, [playDelete, softDeleteTask]);
 
   const editTask = useCallback((id: string, content: string) => {
-    updateState(prev => ({
-      tasks: prev.tasks.map(t => t.id === id ? { ...t, content } : t),
-    }));
-  }, [updateState]);
+    updateTask.mutate({ id: Number(id), content });
+  }, [updateTask]);
 
   const clearCompleted = useCallback(() => {
-    const completed = state.tasks.filter(t => t.completed);
-    updateState(prev => ({
-      tasks: prev.tasks.filter(t => !t.completed),
-      deletedTasks: [...completed.map(t => ({ ...t, deletedAt: Date.now() })), ...prev.deletedTasks],
-    }));
-  }, [state.tasks, updateState]);
+    clearCompletedMut.mutate();
+  }, [clearCompletedMut]);
 
   const restoreTask = useCallback((id: string) => {
-    const task = state.deletedTasks.find(t => t.id === id);
-    if (task) {
-      const { deletedAt, ...restored } = task;
-      updateState(prev => ({
-        deletedTasks: prev.deletedTasks.filter(t => t.id !== id),
-        tasks: [restored, ...prev.tasks],
-      }));
-    }
-  }, [state.deletedTasks, updateState]);
+    restoreTaskMut.mutate({ id: Number(id) });
+  }, [restoreTaskMut]);
 
   const clearTrash = useCallback(() => {
-    updateState({ deletedTasks: [] });
-  }, [updateState]);
+    clearTrashMut.mutate();
+  }, [clearTrashMut]);
 
   const handleInput = useCallback(() => {
     if (inputRef.current) {
@@ -152,16 +163,25 @@ export default function App() {
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (isComposingRef.current) return;
-
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       submitNote();
     }
   }, [submitNote]);
 
-  const cycleTheme = useCallback(() => {
-    updateState(prev => ({ themeIndex: (prev.themeIndex + 1) % THEMES.length }));
-  }, [updateState]);
+  // Show loading while checking auth
+  if (authLoading) {
+    return (
+      <div className="w-screen h-screen flex items-center justify-center" style={{ background: theme.bg }}>
+        <div className="text-sm" style={{ color: theme.textMuted }}>加载中...</div>
+      </div>
+    );
+  }
+
+  // Show login page if not authenticated
+  if (!isAuthenticated) {
+    return <LoginPage theme={theme} />;
+  }
 
   return (
     <div
@@ -174,12 +194,22 @@ export default function App() {
     >
       {/* Top bar */}
       <div className="fixed top-0 left-0 right-0 z-30 flex items-center justify-between px-6 py-4">
-        <h1
-          className="text-base font-bold tracking-wide"
-          style={{ color: theme.text, fontFamily: "'Noto Serif SC', Georgia, serif" }}
-        >
-          灵感速记
-        </h1>
+        <div className="flex items-center gap-3">
+          <h1
+            className="text-base font-bold tracking-wide"
+            style={{ color: theme.text, fontFamily: "'Noto Serif SC', Georgia, serif" }}
+          >
+            灵感速记
+          </h1>
+          {user && (
+            <span
+              className="text-xs px-2 py-0.5 rounded-full"
+              style={{ background: 'rgba(255,255,255,0.15)', color: theme.textMuted }}
+            >
+              {user.username}
+            </span>
+          )}
+        </div>
         <div className="flex items-center gap-2">
           <button
             onClick={() => setActiveDrawer('search')}
@@ -197,15 +227,23 @@ export default function App() {
           >
             <ListIcon className="w-5 h-5" />
           </button>
+          <button
+            onClick={logout}
+            className="w-9 h-9 rounded-[10px] flex items-center justify-center transition-all duration-200 hover:bg-black/10"
+            style={{ color: theme.textMuted }}
+            title="退出登录"
+          >
+            <LogOutIcon className="w-5 h-5" />
+          </button>
         </div>
       </div>
 
       {/* Main content */}
       <div className="w-full h-full flex flex-col items-center pt-[12vh]">
-        {/* History area - shows recent tasks */}
+        {/* History area */}
         <div className="w-full mb-6">
           <HistoryArea
-            tasks={state.tasks}
+            tasks={activeTasks}
             onToggleComplete={toggleComplete}
             theme={theme}
             animatingTaskId={animatingTaskId}
@@ -214,7 +252,6 @@ export default function App() {
 
         {/* Note input area */}
         <div className="w-full max-w-[70vw] sm:max-w-[600px] px-4 flex flex-col items-center">
-          {/* Placeholder text */}
           {!isInputFocused && !currentInput && (
             <div
               className="text-center mb-4 animate-fadeIn"
@@ -224,10 +261,7 @@ export default function App() {
             </div>
           )}
 
-          {/* Editable area */}
-          <div
-            className={`w-full relative ${isShaking ? 'animate-shake' : ''}`}
-          >
+          <div className={`w-full relative ${isShaking ? 'animate-shake' : ''}`}>
             <div
               ref={inputRef}
               contentEditable
@@ -251,12 +285,8 @@ export default function App() {
             />
           </div>
 
-          {/* Enter hint */}
           {showEnterHint && (
-            <div
-              className="mt-3 text-xs animate-fadeIn"
-              style={{ color: theme.textMuted }}
-            >
+            <div className="mt-3 text-xs animate-fadeIn" style={{ color: theme.textMuted }}>
               按 Enter 提交
             </div>
           )}
@@ -265,9 +295,9 @@ export default function App() {
 
       {/* Control panel */}
       <ControlPanel
-        soundEnabled={state.soundEnabled}
-        onToggleSound={() => updateState({ soundEnabled: !state.soundEnabled })}
-        onToggleTheme={cycleTheme}
+        soundEnabled={true}
+        onToggleSound={() => {}}
+        onToggleTheme={() => {}}
         onOpenList={() => setActiveDrawer('list')}
         onOpenTrash={() => setActiveDrawer('trash')}
         onToggleShortcuts={() => setShowShortcuts(true)}
@@ -278,7 +308,7 @@ export default function App() {
       <TaskListDrawer
         isOpen={activeDrawer === 'list'}
         onClose={() => setActiveDrawer('none')}
-        tasks={state.tasks}
+        tasks={activeTasks}
         onToggleComplete={toggleComplete}
         onDelete={deleteTask}
         onEdit={editTask}
@@ -289,7 +319,7 @@ export default function App() {
       <SearchDrawer
         isOpen={activeDrawer === 'search'}
         onClose={() => setActiveDrawer('none')}
-        tasks={state.tasks}
+        tasks={activeTasks}
         onToggleComplete={toggleComplete}
         theme={theme}
       />
@@ -297,7 +327,7 @@ export default function App() {
       <TrashDrawer
         isOpen={activeDrawer === 'trash'}
         onClose={() => setActiveDrawer('none')}
-        deletedTasks={state.deletedTasks}
+        deletedTasks={deletedTasks}
         onRestore={restoreTask}
         onClearAll={clearTrash}
         theme={theme}

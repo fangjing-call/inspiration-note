@@ -1,4 +1,4 @@
-import { initTRPC } from "@trpc/server";
+import { initTRPC, TRPCError } from "@trpc/server";
 import superjson from "superjson";
 import type { TrpcContext } from "./context";
 
@@ -8,3 +8,17 @@ const t = initTRPC.context<TrpcContext>().create({
 
 export const createRouter = t.router;
 export const publicQuery = t.procedure;
+
+// Authenticated procedure - requires valid JWT token
+export const authedQuery = t.procedure.use(async ({ ctx, next }) => {
+  if (!ctx.userId) {
+    throw new TRPCError({ code: "UNAUTHORIZED", message: "请先登录" });
+  }
+  return next({
+    ctx: {
+      ...ctx,
+      userId: ctx.userId,
+      username: ctx.username,
+    },
+  });
+});
