@@ -6,6 +6,9 @@ export function useAuth() {
   const meQuery = trpc.auth.me.useQuery(undefined, {
     retry: false,
     refetchOnWindowFocus: false,
+    // If API is down, fail fast and fall back to offline mode
+    staleTime: Infinity,
+    gcTime: 0,
   });
 
   const loginMutation = trpc.auth.login.useMutation({
@@ -28,10 +31,16 @@ export function useAuth() {
     window.location.reload();
   }, [utils]);
 
+  // When API is unavailable (query errors), treat as not authenticated
+  // This allows the app to fall back to localStorage mode
+  const apiUnavailable = meQuery.isError;
+  const isLoading = meQuery.isLoading && !meQuery.isError;
+
   return {
     user: meQuery.data,
-    isLoading: meQuery.isLoading,
+    isLoading,
     isAuthenticated: !!meQuery.data,
+    apiUnavailable,
     login: loginMutation.mutateAsync,
     register: registerMutation.mutateAsync,
     logout,
