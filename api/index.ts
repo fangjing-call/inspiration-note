@@ -1,24 +1,25 @@
+import { Hono } from "hono";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { appRouter } from "./router";
 import { createContext } from "./context";
+import { getRequestListener } from "@hono/node-server";
+import type { IncomingMessage, ServerResponse } from "http";
 
-// Vercel API route - handles /api/* requests
-// Vercel strips /api prefix, so /api/trpc/* becomes /trpc/*
-export default async function handler(request: Request): Promise<Response> {
-  const url = new URL(request.url);
+const app = new Hono().basePath("/api");
 
-  // Handle tRPC requests
-  if (url.pathname.startsWith("/trpc")) {
-    return fetchRequestHandler({
-      endpoint: "/api/trpc",
-      req: request,
-      router: appRouter,
-      createContext,
-    });
-  }
-
-  return new Response(JSON.stringify({ error: "Not Found" }), {
-    status: 404,
-    headers: { "Content-Type": "application/json" },
+app.all("/trpc/*", async (c) => {
+  return fetchRequestHandler({
+    endpoint: "/api/trpc",
+    req: c.req.raw,
+    router: appRouter,
+    createContext,
   });
-}
+});
+
+app.all("/*", (c) => c.json({ error: "Not Found" }, 404));
+
+// Vercel Node.js handler
+export default (req: IncomingMessage, res: ServerResponse) => {
+  const listener = getRequestListener(app.fetch);
+  return listener(req, res);
+};
