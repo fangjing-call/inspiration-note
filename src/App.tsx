@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { useAuth } from '@/hooks/useAuth';
+import { usePersistentState } from '@/hooks/usePersistentState';
 import { useSound } from '@/hooks/useSound';
 import { THEMES } from '@/types';
 import type { Task, DrawerType } from '@/types';
@@ -14,54 +15,33 @@ import { ShortcutsOverlay } from '@/components/ShortcutsOverlay';
 import { LoginPage } from '@/pages/LoginPage';
 import './App.css';
 
-export default function App() {
-  const { user, isLoading, isAuthenticated, logout } = useAuth();
-  const theme = THEMES[0];
+function generateId() {
+  return Date.now().toString(36) + Math.random().toString(36).substr(2);
+}
 
-  // tRPC queries & mutations
-  const utils = trpc.useUtils();
-  const tasksQuery = trpc.task.list.useQuery(undefined, {
-    enabled: isAuthenticated,
-    staleTime: 1000,
-  });
-  const createTask = trpc.task.create.useMutation({
-    onSuccess: () => utils.task.list.invalidate(),
-  });
-  const toggleTask = trpc.task.toggleComplete.useMutation({
-    onSuccess: () => utils.task.list.invalidate(),
-  });
-  const updateTask = trpc.task.update.useMutation({
-    onSuccess: () => utils.task.list.invalidate(),
-  });
-  const softDeleteTask = trpc.task.softDelete.useMutation({
-    onSuccess: () => utils.task.list.invalidate(),
-  });
-  const restoreTaskMut = trpc.task.restore.useMutation({
-    onSuccess: () => utils.task.list.invalidate(),
-  });
-  const clearCompletedMut = trpc.task.clearCompleted.useMutation({
-    onSuccess: () => utils.task.list.invalidate(),
-  });
-  const clearTrashMut = trpc.task.clearTrash.useMutation({
-    onSuccess: () => utils.task.list.invalidate(),
-  });
+// ==================== SHARED UI ====================
 
-  // Convert DB tasks to our Task type
-  const allTasks: Task[] = useMemo(() => {
-    if (!tasksQuery.data) return [];
-    return tasksQuery.data.map((t: any) => ({
-      id: String(t.id),
-      content: t.content,
-      completed: t.completed,
-      createdAt: new Date(t.createdAt).getTime(),
-      deletedAt: t.deletedAt ? new Date(t.deletedAt).getTime() : undefined,
-    }));
-  }, [tasksQuery.data]);
+interface NoteAppProps {
+  theme: typeof THEMES[0];
+  activeTasks: Task[];
+  deletedTasks: Task[];
+  onToggleComplete: (id: string) => void;
+  onDeleteTask: (id: string) => void;
+  onEditTask: (id: string, content: string) => void;
+  onClearCompleted: () => void;
+  onRestoreTask: (id: string) => void;
+  onClearTrash: () => void;
+  onSubmitNote: (content: string) => void;
+  user?: { username: string } | null;
+  onLogout?: () => void;
+}
 
-  const activeTasks = useMemo(() => allTasks.filter((t: Task) => !t.deletedAt), [allTasks]);
-  const deletedTasks = useMemo(() => allTasks.filter((t: Task) => !!t.deletedAt), [allTasks]);
-
-  const { playCapture, playError, playComplete, playDelete } = useSound(true);
+function NoteAppUI({
+  theme, activeTasks, deletedTasks, onToggleComplete, onDeleteTask,
+  onEditTask, onClearCompleted, onRestoreTask, onClearTrash, onSubmitNote,
+  user, onLogout,
+}: NoteAppProps) {
+  const { playCapture, playError } = useSound(true);
 
   const [currentInput, setCurrentInput] = useState('');
   const [isInputFocused, setIsInputFocused] = useState(false);
@@ -73,7 +53,6 @@ export default function App() {
   const inputRef = useRef<HTMLDivElement>(null);
   const isComposingRef = useRef(false);
 
-  // Keyboard shortcuts
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
@@ -96,7 +75,7 @@ export default function App() {
     return () => window.removeEventListener('keydown', handler);
   }, []);
 
-  const submitNote = useCallback(() => {
+  const handleSubmit = useCallback(() => {
     const trimmed = currentInput.trim();
     if (!trimmed) {
       playError();
@@ -105,32 +84,13 @@ export default function App() {
       return;
     }
     playCapture();
-    const tempId = String(Date.now());
+    const tempId = generateId();
     setAnimatingTaskId(tempId);
-    createTask.mutate({ content: trimmed });
+    onSubmitNote(trimmed);
     setCurrentInput('');
     if (inputRef.current) inputRef.current.textContent = '';
     setTimeout(() => setAnimatingTaskId(null), 500);
-  }, [currentInput, playCapture, playError, createTask]);
-
-  const toggleComplete = useCallback((id: string) => {
-    const task = activeTasks.find((t: Task) => t.id === id);
-    if (task && !task.completed) playComplete();
-    toggleTask.mutate({ id: Number(id) });
-  }, [activeTasks, playComplete, toggleTask]);
-
-  const deleteTask = useCallback((id: string) => {
-    playDelete();
-    softDeleteTask.mutate({ id: Number(id) });
-  }, [playDelete, softDeleteTask]);
-
-  const editTask = useCallback((id: string, content: string) => {
-    updateTask.mutate({ id: Number(id), content });
-  }, [updateTask]);
-
-  const clearCompleted = useCallback(() => clearCompletedMut.mutate(), [clearCompletedMut]);
-  const restoreTask = useCallback((id: string) => restoreTaskMut.mutate({ id: Number(id) }), [restoreTaskMut]);
-  const clearTrash = useCallback(() => clearTrashMut.mutate(), [clearTrashMut]);
+  }, [currentInput, playCapture, playError, onSubmitNote]);
 
   const handleInput = useCallback(() => {
     if (inputRef.current) setCurrentInput(inputRef.current.textContent || '');
@@ -140,23 +100,9 @@ export default function App() {
     if (isComposingRef.current) return;
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      submitNote();
+      handleSubmit();
     }
-  }, [submitNote]);
-
-  // Loading state
-  if (isLoading) {
-    return (
-      <div className="w-screen h-screen flex items-center justify-center" style={{ background: theme.bg }}>
-        <div className="text-sm" style={{ color: theme.textMuted }}>加载中...</div>
-      </div>
-    );
-  }
-
-  // Not logged in → show login page
-  if (!isAuthenticated) {
-    return <LoginPage theme={theme} />;
-  }
+  }, [handleSubmit]);
 
   return (
     <div className="w-screen h-screen overflow-hidden relative select-none" style={{ background: theme.bg, fontFamily: "'Noto Sans SC', -apple-system, sans-serif" }}>
@@ -175,16 +121,18 @@ export default function App() {
           <button onClick={() => setActiveDrawer('list')} className="w-9 h-9 rounded-[10px] flex items-center justify-center transition-all duration-200 hover:bg-black/10" style={{ color: theme.textMuted }} title="任务列表 (⌘L)">
             <ListIcon className="w-5 h-5" />
           </button>
-          <button onClick={logout} className="w-9 h-9 rounded-[10px] flex items-center justify-center transition-all duration-200 hover:bg-black/10" style={{ color: theme.textMuted }} title="退出登录">
-            <LogOutIcon className="w-5 h-5" />
-          </button>
+          {onLogout && (
+            <button onClick={onLogout} className="w-9 h-9 rounded-[10px] flex items-center justify-center transition-all duration-200 hover:bg-black/10" style={{ color: theme.textMuted }} title="退出登录">
+              <LogOutIcon className="w-5 h-5" />
+            </button>
+          )}
         </div>
       </div>
 
       {/* Main content */}
       <div className="w-full h-full flex flex-col items-center pt-[12vh]">
         <div className="w-full mb-6">
-          <HistoryArea tasks={activeTasks} onToggleComplete={toggleComplete} theme={theme} animatingTaskId={animatingTaskId} />
+          <HistoryArea tasks={activeTasks} onToggleComplete={onToggleComplete} theme={theme} animatingTaskId={animatingTaskId} />
         </div>
         <div className="w-full max-w-[70vw] sm:max-w-[600px] px-4 flex flex-col items-center">
           {!isInputFocused && !currentInput && (
@@ -193,7 +141,27 @@ export default function App() {
             </div>
           )}
           <div className={`w-full relative ${isShaking ? 'animate-shake' : ''}`}>
-            <div ref={inputRef} contentEditable suppressContentEditableWarning onInput={handleInput} onKeyDown={handleKeyDown} onFocus={() => setIsInputFocused(true)} onBlur={() => setIsInputFocused(false)} onCompositionStart={() => { isComposingRef.current = true; }} onCompositionEnd={() => { isComposingRef.current = false; }} className="w-full min-h-[60px] max-h-[200px] overflow-y-auto outline-none text-center break-words" style={{ color: theme.text, fontSize: 'clamp(24px, 4vw, 36px)', lineHeight: 1.4, fontFamily: "'Noto Sans SC', sans-serif", fontWeight: 400, caretColor: theme.accent }} data-placeholder="随时记录，不再遗忘..." />
+            <div
+              ref={inputRef}
+              contentEditable
+              suppressContentEditableWarning
+              onInput={handleInput}
+              onKeyDown={handleKeyDown}
+              onFocus={() => setIsInputFocused(true)}
+              onBlur={() => setIsInputFocused(false)}
+              onCompositionStart={() => { isComposingRef.current = true; }}
+              onCompositionEnd={() => { isComposingRef.current = false; }}
+              className="w-full min-h-[60px] max-h-[200px] overflow-y-auto outline-none text-center break-words"
+              style={{
+                color: theme.text,
+                fontSize: 'clamp(24px, 4vw, 36px)',
+                lineHeight: 1.4,
+                fontFamily: "'Noto Sans SC', sans-serif",
+                fontWeight: 400,
+                caretColor: theme.accent,
+              }}
+              data-placeholder="随时记录，不再遗忘..."
+            />
           </div>
           {currentInput.trim().length > 0 && (
             <div className="mt-3 text-xs animate-fadeIn" style={{ color: theme.textMuted }}>按 Enter 提交</div>
@@ -202,13 +170,211 @@ export default function App() {
       </div>
 
       {/* Control panel */}
-      <ControlPanel soundEnabled={true} onToggleSound={() => {}} onToggleTheme={() => {}} onOpenList={() => setActiveDrawer('list')} onOpenTrash={() => setActiveDrawer('trash')} onToggleShortcuts={() => setShowShortcuts(true)} theme={theme} />
+      <ControlPanel
+        soundEnabled={true}
+        onToggleSound={() => {}}
+        onToggleTheme={() => {}}
+        onOpenList={() => setActiveDrawer('list')}
+        onOpenTrash={() => setActiveDrawer('trash')}
+        onToggleShortcuts={() => setShowShortcuts(true)}
+        theme={theme}
+      />
 
       {/* Drawers */}
-      <TaskListDrawer isOpen={activeDrawer === 'list'} onClose={() => setActiveDrawer('none')} tasks={activeTasks} onToggleComplete={toggleComplete} onDelete={deleteTask} onEdit={editTask} onClearCompleted={clearCompleted} theme={theme} />
-      <SearchDrawer isOpen={activeDrawer === 'search'} onClose={() => setActiveDrawer('none')} tasks={activeTasks} onToggleComplete={toggleComplete} theme={theme} />
-      <TrashDrawer isOpen={activeDrawer === 'trash'} onClose={() => setActiveDrawer('none')} deletedTasks={deletedTasks} onRestore={restoreTask} onClearAll={clearTrash} theme={theme} />
+      <TaskListDrawer isOpen={activeDrawer === 'list'} onClose={() => setActiveDrawer('none')} tasks={activeTasks} onToggleComplete={onToggleComplete} onDelete={onDeleteTask} onEdit={onEditTask} onClearCompleted={onClearCompleted} theme={theme} />
+      <SearchDrawer isOpen={activeDrawer === 'search'} onClose={() => setActiveDrawer('none')} tasks={activeTasks} onToggleComplete={onToggleComplete} theme={theme} />
+      <TrashDrawer isOpen={activeDrawer === 'trash'} onClose={() => setActiveDrawer('none')} deletedTasks={deletedTasks} onRestore={onRestoreTask} onClearAll={onClearTrash} theme={theme} />
       <ShortcutsOverlay isOpen={showShortcuts} onClose={() => setShowShortcuts(false)} theme={theme} />
     </div>
   );
+}
+
+// ==================== OFFLINE MODE ====================
+
+function OfflineApp() {
+  const { state, updateState } = usePersistentState();
+  const theme = THEMES[state.themeIndex];
+
+  const submitNote = useCallback((content: string) => {
+    const newTask: Task = {
+      id: generateId(),
+      content,
+      completed: false,
+      createdAt: Date.now(),
+    };
+    updateState(prev => ({ tasks: [newTask, ...prev.tasks] }));
+  }, [updateState]);
+
+  const toggleComplete = useCallback((id: string) => {
+    updateState(prev => ({
+      tasks: prev.tasks.map(t => t.id === id ? { ...t, completed: !t.completed } : t),
+    }));
+  }, [updateState]);
+
+  const deleteTask = useCallback((id: string) => {
+    const task = state.tasks.find(t => t.id === id);
+    if (task) {
+      updateState(prev => ({
+        tasks: prev.tasks.filter(t => t.id !== id),
+        deletedTasks: [{ ...task, deletedAt: Date.now() }, ...prev.deletedTasks],
+      }));
+    }
+  }, [state.tasks, updateState]);
+
+  const editTask = useCallback((id: string, content: string) => {
+    updateState(prev => ({
+      tasks: prev.tasks.map(t => t.id === id ? { ...t, content } : t),
+    }));
+  }, [updateState]);
+
+  const clearCompleted = useCallback(() => {
+    const completed = state.tasks.filter(t => t.completed);
+    updateState(prev => ({
+      tasks: prev.tasks.filter(t => !t.completed),
+      deletedTasks: [...completed.map(t => ({ ...t, deletedAt: Date.now() })), ...prev.deletedTasks],
+    }));
+  }, [state.tasks, updateState]);
+
+  const restoreTask = useCallback((id: string) => {
+    const task = state.deletedTasks.find(t => t.id === id);
+    if (task) {
+      const { deletedAt, ...restored } = task;
+      updateState(prev => ({
+        deletedTasks: prev.deletedTasks.filter(t => t.id !== id),
+        tasks: [restored, ...prev.tasks],
+      }));
+    }
+  }, [state.deletedTasks, updateState]);
+
+  const clearTrash = useCallback(() => updateState({ deletedTasks: [] }), [updateState]);
+
+  return (
+    <NoteAppUI
+      theme={theme}
+      activeTasks={state.tasks}
+      deletedTasks={state.deletedTasks}
+      onToggleComplete={toggleComplete}
+      onDeleteTask={deleteTask}
+      onEditTask={editTask}
+      onClearCompleted={clearCompleted}
+      onRestoreTask={restoreTask}
+      onClearTrash={clearTrash}
+      onSubmitNote={submitNote}
+    />
+  );
+}
+
+// ==================== ONLINE MODE ====================
+
+function OnlineApp() {
+  const { user, logout } = useAuth();
+  const theme = THEMES[0];
+  const utils = trpc.useUtils();
+
+  const tasksQuery = trpc.task.list.useQuery(undefined, {
+    enabled: true,
+    staleTime: 1000,
+    retry: false,
+  });
+
+  const createTask = trpc.task.create.useMutation({
+    onSuccess: () => utils.task.list.invalidate(),
+  });
+  const toggleTask = trpc.task.toggleComplete.useMutation({
+    onSuccess: () => utils.task.list.invalidate(),
+  });
+  const updateTask = trpc.task.update.useMutation({
+    onSuccess: () => utils.task.list.invalidate(),
+  });
+  const softDeleteTask = trpc.task.softDelete.useMutation({
+    onSuccess: () => utils.task.list.invalidate(),
+  });
+  const restoreTaskMut = trpc.task.restore.useMutation({
+    onSuccess: () => utils.task.list.invalidate(),
+  });
+  const clearCompletedMut = trpc.task.clearCompleted.useMutation({
+    onSuccess: () => utils.task.list.invalidate(),
+  });
+  const clearTrashMut = trpc.task.clearTrash.useMutation({
+    onSuccess: () => utils.task.list.invalidate(),
+  });
+
+  const allTasks: Task[] = useMemo(() => {
+    if (!tasksQuery.data) return [];
+    return tasksQuery.data.map((t: any) => ({
+      id: String(t.id),
+      content: t.content,
+      completed: t.completed,
+      createdAt: new Date(t.createdAt).getTime(),
+      deletedAt: t.deletedAt ? new Date(t.deletedAt).getTime() : undefined,
+    }));
+  }, [tasksQuery.data]);
+
+  const activeTasks = useMemo(() => allTasks.filter((t: Task) => !t.deletedAt), [allTasks]);
+  const deletedTasks = useMemo(() => allTasks.filter((t: Task) => !!t.deletedAt), [allTasks]);
+
+  const submitNote = useCallback((content: string) => {
+    createTask.mutate({ content });
+  }, [createTask]);
+
+  const toggleComplete = useCallback((id: string) => {
+    toggleTask.mutate({ id: Number(id) });
+  }, [toggleTask]);
+
+  const deleteTask = useCallback((id: string) => {
+    softDeleteTask.mutate({ id: Number(id) });
+  }, [softDeleteTask]);
+
+  const editTask = useCallback((id: string, content: string) => {
+    updateTask.mutate({ id: Number(id), content });
+  }, [updateTask]);
+
+  const clearCompleted = useCallback(() => clearCompletedMut.mutate(), [clearCompletedMut]);
+  const restoreTask = useCallback((id: string) => restoreTaskMut.mutate({ id: Number(id) }), [restoreTaskMut]);
+  const clearTrash = useCallback(() => clearTrashMut.mutate(), [clearTrashMut]);
+
+  return (
+    <NoteAppUI
+      theme={theme}
+      activeTasks={activeTasks}
+      deletedTasks={deletedTasks}
+      onToggleComplete={toggleComplete}
+      onDeleteTask={deleteTask}
+      onEditTask={editTask}
+      onClearCompleted={clearCompleted}
+      onRestoreTask={restoreTask}
+      onClearTrash={clearTrash}
+      onSubmitNote={submitNote}
+      user={user}
+      onLogout={logout}
+    />
+  );
+}
+
+// ==================== MAIN APP ====================
+
+export default function App() {
+  const { isLoading, isAuthenticated, apiUnavailable } = useAuth();
+
+  // Show loading spinner for max 3 seconds
+  if (isLoading) {
+    return (
+      <div className="w-screen h-screen flex items-center justify-center" style={{ background: THEMES[0].bg }}>
+        <div className="text-sm" style={{ color: THEMES[0].textMuted }}>加载中...</div>
+      </div>
+    );
+  }
+
+  // API is down or no backend → offline mode (localStorage)
+  if (apiUnavailable) {
+    return <OfflineApp />;
+  }
+
+  // API is up but not logged in → show login
+  if (!isAuthenticated) {
+    return <LoginPage theme={THEMES[0]} />;
+  }
+
+  // API is up and logged in → cloud mode
+  return <OnlineApp />;
 }

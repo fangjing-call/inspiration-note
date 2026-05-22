@@ -1,15 +1,26 @@
-import { useCallback } from "react";
+import { useCallback, useState, useEffect } from "react";
 import { trpc } from "@/providers/trpc";
 
 export function useAuth() {
   const utils = trpc.useUtils();
+  const [timedOut, setTimedOut] = useState(false);
+
   const meQuery = trpc.auth.me.useQuery(undefined, {
     retry: false,
     refetchOnWindowFocus: false,
-    // If API is down, fail fast and fall back to offline mode
     staleTime: Infinity,
     gcTime: 0,
   });
+
+  // If API takes more than 3 seconds, assume it's unavailable
+  useEffect(() => {
+    if (meQuery.isLoading) {
+      const timer = setTimeout(() => {
+        setTimedOut(true);
+      }, 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [meQuery.isLoading]);
 
   const loginMutation = trpc.auth.login.useMutation({
     onSuccess: (data) => {
@@ -31,10 +42,10 @@ export function useAuth() {
     window.location.reload();
   }, [utils]);
 
-  // When API is unavailable (query errors), treat as not authenticated
-  // This allows the app to fall back to localStorage mode
-  const apiUnavailable = meQuery.isError;
-  const isLoading = meQuery.isLoading && !meQuery.isError;
+  // API is unavailable if query errors OR times out
+  const apiUnavailable = meQuery.isError || timedOut;
+  // Only show loading for first 3 seconds
+  const isLoading = meQuery.isLoading && !timedOut;
 
   return {
     user: meQuery.data,
