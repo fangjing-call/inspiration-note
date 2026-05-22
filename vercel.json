@@ -8,11 +8,5 @@
       "source": "/api/(.*)",
       "destination": "/api/index"
     }
-  ],
-  "functions": {
-    "api/index.ts": {
-      "maxDuration": 10,
-      "runtime": "nodejs18.x"
-    }
-  }
+  ]
 }
