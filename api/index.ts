@@ -21,7 +21,12 @@ export default async function handler(request: Request): Promise<Response> {
       });
     } catch (err: any) {
       return new Response(
-        JSON.stringify({ error: "API Error", message: err.message, stack: err.stack }),
+        JSON.stringify({ 
+          error: "API Error", 
+          message: err?.message || String(err),
+          name: err?.name,
+          stack: err?.stack?.split('\n').slice(0, 5)
+        }, null, 2),
         { status: 500, headers: { "Content-Type": "application/json" } }
       );
     }
