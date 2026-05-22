@@ -3,9 +3,11 @@ import { createRouter, authedQuery } from "../middleware";
 import { getDb } from "../queries/connection";
 import { tasks } from "@db/schema";
 import { eq, and, isNull, isNotNull, desc } from "drizzle-orm";
+import { initDb } from "../_init-db";
 
 export const taskRouter = createRouter({
   list: authedQuery.query(async ({ ctx }) => {
+    await initDb();
     const db = getDb();
     const result = await db
       .select()
@@ -18,25 +20,23 @@ export const taskRouter = createRouter({
   create: authedQuery
     .input(z.object({ content: z.string().min(1).max(1000) }))
     .mutation(async ({ ctx, input }) => {
+      await initDb();
       const db = getDb();
-      const result = await db.insert(tasks).values({
-        userId: ctx.userId,
-        content: input.content,
-        completed: false,
-      });
-      return {
-        id: Number(result[0].insertId),
-        userId: ctx.userId,
-        content: input.content,
-        completed: false,
-        createdAt: new Date(),
-        deletedAt: null,
-      };
+      const result = await db
+        .insert(tasks)
+        .values({
+          userId: ctx.userId,
+          content: input.content,
+          completed: false,
+        })
+        .returning();
+      return result[0];
     }),
 
   toggleComplete: authedQuery
     .input(z.object({ id: z.number() }))
     .mutation(async ({ ctx, input }) => {
+      await initDb();
       const db = getDb();
       const existing = await db
         .select()
@@ -60,6 +60,7 @@ export const taskRouter = createRouter({
   update: authedQuery
     .input(z.object({ id: z.number(), content: z.string().min(1).max(1000) }))
     .mutation(async ({ ctx, input }) => {
+      await initDb();
       const db = getDb();
       await db
         .update(tasks)
@@ -71,6 +72,7 @@ export const taskRouter = createRouter({
   softDelete: authedQuery
     .input(z.object({ id: z.number() }))
     .mutation(async ({ ctx, input }) => {
+      await initDb();
       const db = getDb();
       await db
         .update(tasks)
@@ -82,6 +84,7 @@ export const taskRouter = createRouter({
   restore: authedQuery
     .input(z.object({ id: z.number() }))
     .mutation(async ({ ctx, input }) => {
+      await initDb();
       const db = getDb();
       await db
         .update(tasks)
@@ -91,6 +94,7 @@ export const taskRouter = createRouter({
     }),
 
   clearCompleted: authedQuery.mutation(async ({ ctx }) => {
+    await initDb();
     const db = getDb();
     await db
       .update(tasks)
@@ -106,20 +110,11 @@ export const taskRouter = createRouter({
   }),
 
   clearTrash: authedQuery.mutation(async ({ ctx }) => {
+    await initDb();
     const db = getDb();
     await db
       .delete(tasks)
       .where(and(eq(tasks.userId, ctx.userId), isNotNull(tasks.deletedAt)));
     return { success: true };
   }),
-
-  permanentlyDelete: authedQuery
-    .input(z.object({ id: z.number() }))
-    .mutation(async ({ ctx, input }) => {
-      const db = getDb();
-      await db
-        .delete(tasks)
-        .where(and(eq(tasks.id, input.id), eq(tasks.userId, ctx.userId)));
-      return { success: true };
-    }),
 });

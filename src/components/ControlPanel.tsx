@@ -1,4 +1,4 @@
-import { KeyboardIcon, ListIcon, SoundOnIcon, SoundOffIcon, ThemeIcon, TrashIcon } from './Icons';
+import { KeyboardIcon, ListIcon, SoundOnIcon, SoundOffIcon, ThemeIcon, TrashIcon, ExportIcon, ImportIcon } from './Icons';
 
 interface ControlPanelProps {
   soundEnabled: boolean;
@@ -7,6 +7,8 @@ interface ControlPanelProps {
   onOpenList: () => void;
   onOpenTrash: () => void;
   onToggleShortcuts: () => void;
+  onExport?: () => void;
+  onImport?: () => void;
   theme: { textMuted: string };
 }
 
@@ -17,6 +19,8 @@ export function ControlPanel({
   onOpenList,
   onOpenTrash,
   onToggleShortcuts,
+  onExport,
+  onImport,
   theme,
 }: ControlPanelProps) {
   const buttons = [
@@ -25,6 +29,8 @@ export function ControlPanel({
     { icon: soundEnabled ? <SoundOnIcon className="w-5 h-5" /> : <SoundOffIcon className="w-5 h-5" />, action: onToggleSound, title: soundEnabled ? '关闭音效' : '开启音效' },
     { icon: <ThemeIcon className="w-5 h-5" />, action: onToggleTheme, title: '切换主题' },
     { icon: <TrashIcon className="w-5 h-5" />, action: onOpenTrash, title: '回收站' },
+    ...(onExport ? [{ icon: <ExportIcon className="w-5 h-5" />, action: onExport, title: '导出数据' }] : []),
+    ...(onImport ? [{ icon: <ImportIcon className="w-5 h-5" />, action: onImport, title: '导入数据' }] : []),
   ];
 
   return (

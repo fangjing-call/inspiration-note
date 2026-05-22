@@ -7,6 +7,7 @@ import { getDb } from "../queries/connection";
 import { users } from "@db/schema";
 import { eq } from "drizzle-orm";
 import { JWT_SECRET } from "../context";
+import { initDb } from "../_init-db";
 
 export const authRouter = createRouter({
   register: publicQuery
@@ -17,9 +18,9 @@ export const authRouter = createRouter({
       })
     )
     .mutation(async ({ input }) => {
+      await initDb();
       const db = getDb();
 
-      // Check if username already exists
       const existing = await db
         .select()
         .from(users)
@@ -35,21 +36,23 @@ export const authRouter = createRouter({
 
       const passwordHash = await bcrypt.hash(input.password, 10);
 
-      const result = await db.insert(users).values({
-        username: input.username,
-        passwordHash,
-      });
+      const result = await db
+        .insert(users)
+        .values({
+          username: input.username,
+          passwordHash,
+        })
+        .returning();
 
-      const userId = Number(result[0].insertId);
+      const user = result[0];
 
-      // Generate JWT token
-      const token = await new SignJWT({ userId, username: input.username })
+      const token = await new SignJWT({ userId: user.id, username: user.username })
         .setProtectedHeader({ alg: "HS256" })
         .setIssuedAt()
         .setExpirationTime("30d")
         .sign(JWT_SECRET);
 
-      return { token, user: { id: userId, username: input.username } };
+      return { token, user: { id: user.id, username: user.username } };
     }),
 
   login: publicQuery
@@ -60,6 +63,7 @@ export const authRouter = createRouter({
       })
     )
     .mutation(async ({ input }) => {
+      await initDb();
       const db = getDb();
 
       const found = await db
@@ -95,6 +99,7 @@ export const authRouter = createRouter({
     }),
 
   me: publicQuery.query(async ({ ctx }) => {
+    await initDb();
     if (!ctx.userId) {
       return null;
     }
