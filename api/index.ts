@@ -1,7 +1,6 @@
 export default async function handler(request: Request): Promise<Response> {
   const url = new URL(request.url);
 
-  // Health check - always respond
   if (url.pathname === "/api/ping" || url.pathname === "/api/") {
     return new Response(JSON.stringify({ ok: true, ts: Date.now() }), {
       status: 200,
@@ -9,7 +8,6 @@ export default async function handler(request: Request): Promise<Response> {
     });
   }
 
-  // tRPC - lazy load to avoid init errors
   if (url.pathname.startsWith("/api/trpc")) {
     try {
       const { fetchRequestHandler } = await import("@trpc/server/adapters/fetch");
@@ -23,7 +21,7 @@ export default async function handler(request: Request): Promise<Response> {
       });
     } catch (err: any) {
       return new Response(
-        JSON.stringify({ error: "API Error", message: err.message }),
+        JSON.stringify({ error: "API Error", message: err.message, stack: err.stack }),
         { status: 500, headers: { "Content-Type": "application/json" } }
       );
     }
@@ -34,7 +32,3 @@ export default async function handler(request: Request): Promise<Response> {
     headers: { "Content-Type": "application/json" },
   });
 }
-
-export const config = {
-  runtime: "edge",
-};
