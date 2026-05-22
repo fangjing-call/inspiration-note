@@ -1,16 +1,7 @@
-import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
-import { appRouter } from "./router";
-import { createContext } from "./context";
-
-// Vercel Edge Runtime
-export const config = {
-  runtime: "edge",
-};
-
 export default async function handler(request: Request): Promise<Response> {
   const url = new URL(request.url);
 
-  // Health check
+  // Health check - always respond
   if (url.pathname === "/api/ping" || url.pathname === "/api/") {
     return new Response(JSON.stringify({ ok: true, ts: Date.now() }), {
       status: 200,
@@ -18,14 +9,24 @@ export default async function handler(request: Request): Promise<Response> {
     });
   }
 
-  // tRPC requests
+  // tRPC - lazy load to avoid init errors
   if (url.pathname.startsWith("/api/trpc")) {
-    return fetchRequestHandler({
-      endpoint: "/api/trpc",
-      req: request,
-      router: appRouter,
-      createContext,
-    });
+    try {
+      const { fetchRequestHandler } = await import("@trpc/server/adapters/fetch");
+      const { appRouter } = await import("./router");
+      const { createContext } = await import("./context");
+      return fetchRequestHandler({
+        endpoint: "/api/trpc",
+        req: request,
+        router: appRouter,
+        createContext,
+      });
+    } catch (err: any) {
+      return new Response(
+        JSON.stringify({ error: "API Error", message: err.message }),
+        { status: 500, headers: { "Content-Type": "application/json" } }
+      );
+    }
   }
 
   return new Response(JSON.stringify({ error: "Not Found" }), {
@@ -33,3 +34,7 @@ export default async function handler(request: Request): Promise<Response> {
     headers: { "Content-Type": "application/json" },
   });
 }
+
+export const config = {
+  runtime: "edge",
+};
