@@ -1,26 +1,18 @@
-// Ultra-minimal test - no imports, no async
-export default function handler(request: Request): Response {
-  const url = new URL(request.url);
-  
-  if (url.pathname === "/api/ping" || url.pathname === "/api/") {
-    return new Response(JSON.stringify({ ok: true, time: Date.now() }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
+import type { VercelRequest, VercelResponse } from "@vercel/node";
+
+export default function handler(req: VercelRequest, res: VercelResponse) {
+  const { url } = req;
+
+  if (url === "/api/ping" || url === "/api/") {
+    return res.status(200).json({ ok: true, ts: Date.now() });
+  }
+
+  if (url?.startsWith("/api/trpc")) {
+    // TODO: implement tRPC handler
+    return res.status(200).json({ 
+      result: { data: { ok: true, msg: "trpc endpoint ready", ts: Date.now() } }
     });
   }
 
-  if (url.pathname.startsWith("/api/trpc")) {
-    // Don't import anything - just return a test response
-    return new Response(
-      JSON.stringify({ 
-        result: { data: { ok: true, ts: Date.now() } }
-      }),
-      { status: 200, headers: { "Content-Type": "application/json" } }
-    );
-  }
-
-  return new Response(JSON.stringify({ error: "Not Found" }), {
-    status: 404,
-    headers: { "Content-Type": "application/json" },
-  });
+  return res.status(404).json({ error: "Not Found" });
 }
